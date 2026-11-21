@@ -494,6 +494,39 @@
         }
       }
     },
+    "/clients/{client_id}/revoke": {
+      "post": {
+        "operationId": "RevokeClient",
+        "x-speakeasy-group": "clients",
+        "x-speakeasy-name-override": "revoke",
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Revoke a client",
+        "description": "Permanently revokes a client in a development or production instance, including its active and pending sessions and its linked development browser tokens. Other clients are unaffected. Repeating the request is safe.\nReturns the client with a non-null revoked_at timestamp and no current sessions. Revoked development browser tokens receive dev_browser_unauthenticated on authenticated Frontend API routes. Previously issued session JWTs remain valid until their expiration.\nTo sign in again, the browser must initialize a new client. Unlike Frontend API DELETE /client, this operation requires a backend credential and the target client ID, not the affected browser's cookies.",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Client-2"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationInvalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/ResourceNotFound"
+          }
+        }
+      }
+    },
     "/email_addresses": {
       "post": {
         "operationId": "CreateEmailAddress",
@@ -2577,7 +2610,7 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/User.List"
+            "$ref": "#/components/responses/User.ListOrCursorPage"
           },
           "400": {
             "$ref": "#/components/responses/ClerkErrors"
@@ -2585,8 +2618,14 @@
           "401": {
             "$ref": "#/components/responses/AuthenticationInvalid"
           },
+          "403": {
+            "$ref": "#/components/responses/FeatureNotEnabled"
+          },
           "422": {
             "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "503": {
+            "$ref": "#/components/responses/ClerkErrors"
           }
         }
       },
@@ -4265,6 +4304,9 @@
           "422": {
             "description": "The provided password was incorrect."
           },
+          "429": {
+            "description": "Another password check for the user is in progress. Nothing was counted and the check can be retried."
+          },
           "500": {
             "$ref": "#/components/responses/ClerkErrors"
           }
@@ -4353,6 +4395,9 @@
           },
           "422": {
             "description": "The provided TOTP or backup code was incorrect."
+          },
+          "429": {
+            "description": "Another code check for the user is in progress. Nothing was counted and the check can be retried."
           },
           "500": {
             "$ref": "#/components/responses/ClerkErrors"
@@ -5640,6 +5685,10 @@
                       "sub": {
                         "type": "string",
                         "description": "The ID of the actor."
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "Optional actor type. The value `agent` is reserved for agent task sessions and is rejected."
                       }
                     },
                     "required": [
@@ -11930,6 +11979,15 @@
                     "type": "integer",
                     "description": "The maximum duration that the session which will be created by the generated agent task should last.\nBy default, the duration of a session created via an agent task lasts 30 minutes.",
                     "default": 1800
+                  },
+                  "session_restricted": {
+                    "type": "boolean",
+                    "description": "When true, the session created by the agent task can refresh only its own session token and read.\nClerk's Frontend API refuses every other write from a browser client that holds the session,\nincluding touch, sign-out through the API (the browser's cookie sign-out GET stays allowed), profile and organization writes, sign-in and sign-up, and OAuth approval.\nIt also refuses changing the session's workspace (its active organization).\nExpect an app that relies on those calls, such as the clerk-js touch and sign-out, to receive 403 errors.\nThe session token's `agt` claim then carries `rst: true`; it omits `rst` for an unrestricted session.",
+                    "default": false
+                  },
+                  "session_organization_id": {
+                    "type": "string",
+                    "description": "The organization the agent task session starts in. The user must be a member of it.\nIf omitted, the user's last active organization is used, or the personal workspace\nwhen the user has none. When session_restricted is true, the session cannot use another\nworkspace and ends when this one is no longer available, and creation fails when\nthe result is the personal workspace but the user must choose an organization."
                   }
                 },
                 "required": [
@@ -13766,7 +13824,7 @@
           {
             "name": "subject",
             "in": "query",
-            "description": "Filter logs by subject.",
+            "description": "Filter logs by subject: the ID of the resource the event is about,\nsuch as a user, an organization, or the instance when nothing more\nspecific applies.",
             "required": false,
             "schema": {
               "type": "string"
@@ -13775,7 +13833,7 @@
           {
             "name": "actor",
             "in": "query",
-            "description": "Filter logs by actor",
+            "description": "Filter logs by actor: the ID of whoever triggered the event, such as\na user, a Clerk Dashboard user, an instance key, or an API key. In\nan impersonated session, the actor is the impersonated user.",
             "required": false,
             "schema": {
               "type": "string"
@@ -13884,7 +13942,7 @@
           {
             "name": "filter_match",
             "in": "query",
-            "description": "Controls how `subject`, `type`, `actor`, `user_id`, `identifier`,\n`trace_id`, `client_id`, `session_id`, `impersonator_user_id`,\n`ip_address`, and `payload_filter` entries\nare combined: `all` (default) requires every supplied filter to\nmatch; `any` returns events that match at least one of the\nsupplied filters. `event_time_after`, `event_time_before`, and\n`end_user_facing_only` are always ANDed with the (possibly OR-ed)\nstring filter group.",
+            "description": "Controls how `subject`, `type`, `actor`, `user_id`, `identifier`,\n`trace_id`, `client_id`, `session_id`, `impersonator_user_id`,\n`ip_address`, and `payload_filter` entries\nare combined: `all` (default) requires every supplied filter to\nmatch; `any` returns events that match at least one of the\nsupplied filters. `event_time_after` and `event_time_before` are\nalways ANDed with the (possibly OR-ed) string filter group.",
             "required": false,
             "schema": {
               "type": "string",
@@ -13920,7 +13978,8 @@
           {
             "name": "end_user_facing_only",
             "in": "query",
-            "description": "When set to true, only returns events that are marked as end-user facing.\nWhen set to false or omitted, returns all events.",
+            "deprecated": true,
+            "description": "Deprecated. This parameter has no effect.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -13957,7 +14016,7 @@
           {
             "name": "status",
             "in": "query",
-            "description": "Not allowed with `view=flat`. Group statuses to keep, e.g. `failed`,\nrepeated for several (`status=failed&status=completed`). Keeps only\ngroups that concluded that way and drops the logs outside any\ngroup. A status is a conclusion (`completed`, `failed`), so groups\nthat haven't concluded never match.",
+            "description": "Not allowed with `view=flat`. Group statuses to keep, e.g. `failed`,\nrepeated for several (`status=failed&status=completed`). Keeps only\ngroups with one of those statuses and drops the logs outside any\ngroup. A status is `completed`, `failed` or `abandoned`. A group\nthat is still going has no status and never matches.",
             "required": false,
             "style": "form",
             "explode": true,
@@ -14007,13 +14066,13 @@
           "Logs"
         ],
         "summary": "Retrieve the payload schema of a log event type",
-        "description": "Returns the payload schema of a log event type: which fields its\npayload carries, addressed by the dot-paths that the `payload_filter`\nand `payload_fields` parameters of the list endpoint accept.\n\n`type` accepts a concrete event type (`sign_in.completed`), a\ntrailing-`*` wildcard (`sign_in.*`), or a bare family name (`sign_in`,\nnormalized to `sign_in.*` when no concrete type matches — the\nresponse's `event_type`\nechoes the normalized form). For wildcard lookups the fields are the\nintersection across every matching event type, and `matched_event_types`\nlists what the intersection was computed over; per-type metadata\n(description, severity, docs_group) is present only for concrete types.\n\nThe response is the same for every instance.",
+        "description": "Returns the payload schema of a log event type: which fields its\npayload carries, addressed by the dot-paths that the `payload_filter`\nand `payload_fields` parameters of the list endpoint accept.\n\n`type` accepts a concrete event type (`sign_in.completed`), a\ntrailing-`*` wildcard (`sign_in.*`), or a bare family name (`sign_in`,\nnormalized to `sign_in.*` when no concrete type matches — the\nresponse's `event_type`\nechoes the normalized form). For wildcard lookups the fields are the\nintersection across every matching event type, and `matched_event_types`\nlists what the intersection was computed over; per-type metadata\n(description, severity, docs_group) is present only for concrete types.",
         "parameters": [
           {
             "name": "type",
             "in": "query",
             "required": true,
-            "description": "The event type to describe: concrete (`sign_in.completed`),\ntrailing-`*` wildcard (`sign_in.*`), or bare family name\n(`sign_in`). Unknown types return a 422. A bare `*` is not\naccepted.",
+            "description": "The event type to describe: concrete (`sign_in.completed`),\ntrailing-`*` wildcard (`sign_in.*`), or bare family name\n(`sign_in`). Unknown types return a 422. A bare `*` is not\naccepted; to list every event type, use `GET /logs/types`.",
             "schema": {
               "type": "string",
               "example": "sign_in.*"
@@ -14032,6 +14091,32 @@
           },
           "422": {
             "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/logs/types": {
+      "get": {
+        "operationId": "ListLogTypes",
+        "x-speakeasy-group": "logs",
+        "x-speakeasy-name-override": "listTypes",
+        "tags": [
+          "Logs"
+        ],
+        "summary": "List all log event types",
+        "description": "Returns every event type the instance can see in its logs, each with\nits payload schema, sorted by `event_type`. Each entry is the same as\nthe response of `GET /logs/schemas` for that type.\n\nUse it to discover the values that the `type` parameter of the list\nendpoint accepts, and the payload fields each one carries. The list is\nnot paginated. Event types whose logs are enabled per instance (such as\n`sms.*` and `email.*`) are listed only once enabled.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Log.TypeList"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationInvalid"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationInvalid"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -14062,8 +14147,8 @@
           {
             "name": "started_at",
             "in": "query",
-            "description": "When the group started (Unix timestamp in milliseconds), the\n`started_at` of the group item. It bounds the time range searched.",
-            "required": true,
+            "description": "When the group started (Unix timestamp in milliseconds), the\n`started_at` of the group item. Optional: when omitted, it is\nlooked up from `group_id`, and a group that can't be found or is\npast the retention window returns a 404.",
+            "required": false,
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -14100,6 +14185,9 @@
           },
           "403": {
             "$ref": "#/components/responses/AuthorizationInvalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/ResourceNotFound"
           },
           "422": {
             "$ref": "#/components/responses/UnprocessableEntity"
@@ -15014,6 +15102,73 @@
           },
           "422": {
             "$ref": "#/components/responses/UnprocessableEntity"
+          }
+        }
+      }
+    },
+    "/directories/{directory_id}/groups": {
+      "get": {
+        "operationId": "ListDirectoryGroups",
+        "x-speakeasy-group": "directories",
+        "x-speakeasy-name-override": "listGroups",
+        "tags": [
+          "Directories"
+        ],
+        "summary": "List directory groups",
+        "description": "Returns the groups available in a directory, as reported by the identity provider,\nusing cursor-based pagination.",
+        "parameters": [
+          {
+            "name": "directory_id",
+            "in": "path",
+            "description": "The ID of the directory.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Applies a limit to the number of results returned.\nCan be used for paginating the results together with `starting_after` or `ending_before`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "description": "A cursor for pagination. Provide the `starting_after` cursor from a previous response to fetch the next page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ending_before",
+            "in": "query",
+            "description": "A cursor for pagination. Provide the `ending_before` cursor from a previous response to fetch the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/DirectoryGroup.List"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationInvalid"
+          },
+          "403": {
+            "$ref": "#/components/responses/AuthorizationInvalid"
+          },
+          "404": {
+            "$ref": "#/components/responses/ResourceNotFound"
           }
         }
       }
@@ -16040,7 +16195,8 @@
                     "type": "number",
                     "nullable": true,
                     "minimum": 0,
-                    "exclusiveMinimum": true
+                    "exclusiveMinimum": true,
+                    "maximum": 2147483647
                   }
                 },
                 "required": [
@@ -16810,7 +16966,8 @@
                     "type": "number",
                     "nullable": true,
                     "minimum": 0,
-                    "exclusiveMinimum": true
+                    "exclusiveMinimum": true,
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -17767,7 +17924,8 @@
                     "type": "number",
                     "nullable": true,
                     "minimum": 0,
-                    "exclusiveMinimum": true
+                    "exclusiveMinimum": true,
+                    "maximum": 2147483647
                   },
                   "claims": {
                     "nullable": true
@@ -19532,6 +19690,12 @@
             "type": "string",
             "description": "String representing the identifier of the session.\n"
           },
+          "revoked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Unix timestamp in milliseconds when this client was revoked."
+          },
           "session_ids": {
             "type": "array",
             "items": {
@@ -19628,6 +19792,161 @@
         },
         "required": [
           "errors"
+        ]
+      },
+      "Session-2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "String representing the object's type. Objects of the same type share the same value.\n",
+            "enum": [
+              "session"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked",
+              "ended",
+              "expired",
+              "removed",
+              "abandoned",
+              "replaced"
+            ]
+          },
+          "last_active_organization_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_active_at": {
+            "type": "integer"
+          },
+          "latest_activity": {
+            "$ref": "#/components/schemas/SessionActivityResponse"
+          },
+          "expire_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp in milliseconds of expiration.\n"
+          },
+          "abandon_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp in milliseconds of abandonment.\n"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp of last update.\n"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp of creation.\n"
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "user_id",
+          "client_id",
+          "status",
+          "last_active_at",
+          "expire_at",
+          "abandon_at",
+          "updated_at",
+          "created_at"
+        ]
+      },
+      "Client-2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "String representing the object's type. Objects of the same type share the same value.\n",
+            "enum": [
+              "client"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "String representing the identifier of the session.\n"
+          },
+          "revoked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Unix timestamp in milliseconds when this client was revoked."
+          },
+          "session_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session-2"
+            }
+          },
+          "sign_in_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "sign_up_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_active_session_id": {
+            "nullable": true,
+            "type": "string",
+            "description": "Last active session_id.\n"
+          },
+          "last_authentication_strategy": {
+            "nullable": true,
+            "type": "string",
+            "description": "The authentication strategy that was last used to authenticate the user on this client.\n"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp of last update.\n"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp of creation.\n"
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "session_ids",
+          "sessions",
+          "sign_in_id",
+          "sign_up_id",
+          "last_active_session_id",
+          "last_authentication_strategy",
+          "updated_at",
+          "created_at"
         ]
       },
       "verification_otp": {
@@ -26135,6 +26454,15 @@
             "deprecated": true,
             "description": "A unique identifier for this agent task. Deprecated: use agent_task_id instead.\n"
           },
+          "session_restricted": {
+            "type": "boolean",
+            "description": "Whether the agent task session is restricted. When true, the session can refresh only its own session token and read. Clerk's Frontend API refuses every other write from a browser client that holds the session, including touch, sign-out, profile and organization writes, sign-in and sign-up, and OAuth approval. It also refuses changing the session's workspace (its active organization).\n"
+          },
+          "session_organization_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "The organization the agent task session starts in, and the only one a restricted session can use. Null means the personal workspace.\n"
+          },
           "url": {
             "type": "string",
             "description": "The URL that, when visited, creates a session for the user. Only present in the response to a create request.\n"
@@ -26144,7 +26472,8 @@
           "object",
           "agent_id",
           "agent_task_id",
-          "task_id"
+          "task_id",
+          "session_restricted"
         ]
       },
       "WaitlistEntry": {
@@ -27996,7 +28325,7 @@
           },
           "actor": {
             "type": "string",
-            "description": "The actor that performed the action (e.g., user ID)."
+            "description": "The ID of whoever triggered the event. `actor_type` says what kind\nof principal it is: an end user, a Clerk Dashboard user, an\ninstance key, an API key, an integration, or Clerk itself. In an\nimpersonated session, it is the impersonated user and\n`impersonator` holds whoever started the impersonation."
           },
           "actor_type": {
             "type": "string",
@@ -28017,7 +28346,7 @@
           },
           "subject": {
             "type": "string",
-            "description": "The subject of the event (e.g., user ID, resource ID)."
+            "description": "The ID of the resource the event is about, such as a user or an\norganization. A change to a child record, such as an email address\nor a membership, uses the ID of its parent user or organization.\nEvents that affect several resources use their lowest common\nparent, and side effects use the primary resource's subject. The\ninstance ID is used when nothing more specific applies.\nEvents in the same flow can have different subjects; use\n`group_id` to follow a flow."
           },
           "type": {
             "type": "string",
@@ -28126,7 +28455,7 @@
           "status": {
             "type": "string",
             "nullable": true,
-            "description": "How the flow ended, `completed` or `failed`. Null while the flow\nhas not concluded: no status is recorded for a flow that is still\ngoing or was given up."
+            "description": "How the flow ended: `completed`, `failed`, or `abandoned` when\nnothing concluded it before its abandon deadline passed (a\nsign-in or sign-up nobody finished). Null while the flow is still\ngoing."
           },
           "status_label": {
             "type": "string",
@@ -28262,6 +28591,34 @@
           "object",
           "event_type",
           "fields"
+        ]
+      },
+      "LogSchemaList": {
+        "type": "object",
+        "description": "The schema of every log event type the instance can see, sorted by\n`event_type`. Not paginated.",
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "String representing the object's type. Always \"list\".",
+            "example": "list"
+          },
+          "data": {
+            "type": "array",
+            "description": "One schema per concrete event type, each the same as the\nresponse to a lookup by that type.",
+            "items": {
+              "$ref": "#/components/schemas/LogSchema"
+            }
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of event type schemas in the list."
+          }
+        },
+        "required": [
+          "object",
+          "data",
+          "total_count"
         ]
       },
       "LogWithPayload": {
@@ -28823,6 +29180,16 @@
           }
         }
       },
+      "Client-2": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Client-2"
+            }
+          }
+        }
+      },
       "EmailAddress": {
         "description": "Success",
         "content": {
@@ -29014,15 +29381,29 @@
           }
         }
       },
-      "User.List": {
+      "User.ListOrCursorPage": {
         "description": "Success",
         "content": {
           "application/json": {
             "schema": {
-              "type": "array",
-              "items": {
-                "$ref": "#/components/schemas/User"
-              }
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "FeatureNotEnabled": {
+        "description": "Feature not enabled",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ClerkErrors"
             }
           }
         }
@@ -29043,6 +29424,19 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/TotalCount"
+            }
+          }
+        }
+      },
+      "User.List": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/User"
+              }
             }
           }
         }
@@ -29322,16 +29716,6 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/ActorToken"
-            }
-          }
-        }
-      },
-      "FeatureNotEnabled": {
-        "description": "Feature not enabled",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ClerkErrors"
             }
           }
         }
@@ -30205,6 +30589,16 @@
           }
         }
       },
+      "Log.TypeList": {
+        "description": "Every log event type the instance can see, with its payload schema.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LogSchemaList"
+            }
+          }
+        }
+      },
       "Log.Read": {
         "description": "A single log entry with full payload.",
         "content": {
@@ -30346,6 +30740,51 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Directory"
+            }
+          }
+        }
+      },
+      "DirectoryGroup.List": {
+        "description": "A cursor-paginated list of groups for a directory.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DirectoryGroup"
+                  }
+                },
+                "cursor": {
+                  "type": "object",
+                  "description": "Cursor information for pagination.",
+                  "properties": {
+                    "starting_after": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to fetch the next page of results. Pass it back as `starting_after` on the next request."
+                    },
+                    "ending_before": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to fetch the previous page of results. Pass it back as `ending_before` on the next request."
+                    },
+                    "has_next_page": {
+                      "type": "boolean",
+                      "description": "Whether more results can be fetched using the `starting_after` cursor."
+                    }
+                  },
+                  "required": [
+                    "has_next_page"
+                  ]
+                }
+              },
+              "required": [
+                "data",
+                "cursor"
+              ]
             }
           }
         }
