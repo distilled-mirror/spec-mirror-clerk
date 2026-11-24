@@ -2583,6 +2583,19 @@
             "required": false
           },
           {
+            "name": "metadata",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "Returns users matching every one of the given metadata filters. Repeat it once per filter; each value\nis a JSON object with these fields:\n\n- `scope` (required): `public`, `private` or `unsafe`, the metadata to match against.\n- `key` (required): a dot-separated path into the metadata, e.g. `settings.theme`. Escape a\n  literal dot in a key as `\\.`.\n- `match` (required): `exists` matches users holding the key, whether it holds a value or nested\n  keys. `equals` matches the whole value, case-insensitively.\n- `value`: required for `equals`; not allowed for `exists`.\n- `negate`: `true` inverts the filter. With `exists` it returns the users who do not hold the\n  key. With `equals` it returns the users who hold the key with a different value.\n\nOther fields are rejected.\n\nWith `metadata`, `offset` plus `limit` cannot exceed 1000, and `starting_after` is not accepted.\n`GET /v1/users/count` does not accept `metadata`.\n\nResults are eventually consistent. A user created, updated or deleted a short time ago may not\nyet be reflected in which users are returned or in their order. To read a user right after\nwriting it, fetch it by ID."
+          },
+          {
             "$ref": "#/components/parameters/LimitParameter"
           },
           {
@@ -2596,6 +2609,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "pagination",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "offset",
+                "cursor"
+              ]
+            },
+            "description": "`cursor` pages by cursor, with any `order_by` and any filter, including `metadata`. The response is\nthen an object in place of the array of users: `data` holds the users, and `cursor` is\n`{\"starting_after\": <string or null>, \"ending_before\": <string or null>, \"has_next_page\": <boolean>}`.\nPass its `starting_after` back as `starting_after` for the next page, or its `ending_before` back\nas `ending_before` for the previous one, keeping every other parameter identical. Stop when\n`has_next_page` is `false`; `ending_before` is null on the first page. In this mode\n`starting_after` is that cursor, not a user ID; a cursor from a different `order_by` is rejected\nwith a 422, as is a non-zero `offset`.\n\nResults in this mode are eventually consistent. A user created, updated or deleted a short time\nago may not yet be reflected in which users are returned, in their order, or in any count. To\nread a user right after writing it, fetch it by ID.\n\nWithout this parameter the list pages by offset, and `starting_after` takes a user ID.\n`offset` pages the same way, except that it does not accept `starting_after`."
+          },
+          {
+            "name": "ending_before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "With `pagination=cursor`, the `cursor.ending_before` of a previous response. Returns the page\nbefore it, in the same order. Cannot be combined with `starting_after`, and a cursor from a\ndifferent `order_by` is rejected with a 422. A previous page can hold fewer than `limit` users\neven when more precede it."
+          },
+          {
+            "name": "remaining_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "100",
+                "1000",
+                "10000",
+                "exact"
+              ]
+            },
+            "description": "With `pagination=cursor`, also counts the users from the start of this page onward, this page\nincluded. On the first page that is every user the request matches.\n\nA number counts up to that many. The response's `cursor` then carries one of two\nfields: `remaining_count_exact` when there are fewer users than the number given, and otherwise\n`remaining_count_at_least`, set to that number. Larger numbers make the request slower.\n\n`exact` counts them all, with no ceiling, and the `cursor` carries `remaining_count_exact`. The\ncount takes longer the more users match, and a request whose count does not finish in time is\nrejected with a 422 `users_exact_count_timed_out`; retry it with a number, or without this\nparameter.\n\nThe count is computed separately from the page and is subject to the same delay. Treat it as a\nclose estimate: it can differ slightly from the number of users that paging through the results\nreturns."
           },
           {
             "name": "order_by",
@@ -3234,6 +3284,11 @@
                   "sign_out_of_other_sessions": {
                     "type": "boolean",
                     "description": "Set to `true` to sign out the user from all their active sessions once their password is updated. This parameter can only be used when providing a `password`.",
+                    "nullable": true
+                  },
+                  "reset_client_trust": {
+                    "type": "boolean",
+                    "description": "When set to `true`, also clears Device Trust for the user on every client, whether or not the instance has Device Trust enabled.\nThe next sign-in by this user on any client counts as a new device: it can require a Device Trust challenge and trigger the new device email.\nThis parameter can only be used when providing a `password` and setting `sign_out_of_other_sessions` to `true`, otherwise a 422 is returned and the user is not updated.",
                     "nullable": true
                   },
                   "totp_secret": {
@@ -4867,7 +4922,7 @@
         "x-speakeasy-group": "users",
         "x-speakeasy-name-override": "setPasswordCompromised",
         "summary": "Set a user's password as compromised",
-        "description": "Sets the given user's password as compromised. The user will be prompted to reset their password on their next sign-in.",
+        "description": "Sets the given user's password as compromised. The user will be prompted to reset their password on their next sign-in.\nWhen the password was not already compromised, or when `revoke_all_sessions` is `true`, it also marks all of the user's devices as untrusted. On instances with Device Trust enabled, the next password sign-in on any of those devices can require a Device Trust challenge.\nCalling it again on a password that is already compromised, without `revoke_all_sessions`, changes nothing.",
         "tags": [
           "Users"
         ],
@@ -22056,6 +22111,55 @@
           "legal_accepted_at"
         ]
       },
+      "UserCursorPage": {
+        "type": "object",
+        "description": "A page of users from `GET /v1/users` with `pagination=cursor`.",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/User"
+            }
+          },
+          "cursor": {
+            "type": "object",
+            "description": "Cursor information for pagination.",
+            "properties": {
+              "starting_after": {
+                "type": "string",
+                "nullable": true,
+                "description": "Cursor to fetch the next page of results. Pass it back as `starting_after` on the next request. Null on the last page."
+              },
+              "ending_before": {
+                "type": "string",
+                "nullable": true,
+                "description": "Cursor to fetch the previous page of results. Pass it back as `ending_before` on the next request. Null on the first page."
+              },
+              "has_next_page": {
+                "type": "boolean",
+                "description": "Whether more results can be fetched using the `starting_after` cursor."
+              },
+              "remaining_count_exact": {
+                "type": "integer",
+                "description": "The number of users from the start of this page onward, this page included. Present when `remaining_count` was `exact`, or was a number and there are fewer users than it."
+              },
+              "remaining_count_at_least": {
+                "type": "integer",
+                "description": "A lower bound on the number of users from the start of this page onward, this page included. Present when `remaining_count` was a number and the count stopped at it."
+              }
+            },
+            "required": [
+              "starting_after",
+              "ending_before",
+              "has_next_page"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "cursor"
+        ]
+      },
       "PasswordHasher": {
         "type": "string",
         "description": "The hashing algorithm that was used to generate the password digest.\n\nThe algorithms we support at the moment are [`bcrypt`](https://en.wikipedia.org/wiki/Bcrypt), [`bcrypt_sha256_django`](https://docs.djangoproject.com/en/4.0/topics/auth/passwords/), [`md5`](https://en.wikipedia.org/wiki/MD5), `pbkdf2_sha1`, `pbkdf2_sha256`, [`pbkdf2_sha256_django`](https://docs.djangoproject.com/en/4.0/topics/auth/passwords/),\n`pbkdf2_sha512`, [`phpass`](https://www.openwall.com/phpass/), `md5_phpass`, [`scrypt_firebase`](https://firebaseopensource.com/projects/firebase/scrypt/),\n[`scrypt_werkzeug`](https://werkzeug.palletsprojects.com/en/3.0.x/utils/#werkzeug.security.generate_password_hash), [`sha256`](https://en.wikipedia.org/wiki/SHA-2),\n[`ldap_ssha`](https://www.openldap.org/faq/data/cache/347.html), the [`argon2`](https://argon2.online/) variants: `argon2i` and `argon2id`, `sha512_symfony`, the SHA-512 variant of the [Symfony](https://symfony.com/doc/current/security/passwords.html) legacy hasher,\nand `pbkdf2_sha512_hex`, a variant of `pbkdf2_sha512` that accepts hex-encoded salt and hash.\n\nEach of the supported hashers expects the incoming digest to be in a particular format. See the [Clerk docs](https://clerk.com/docs/references/backend/user/create-user) for more information."
@@ -29392,6 +29496,9 @@
                   "items": {
                     "$ref": "#/components/schemas/User"
                   }
+                },
+                {
+                  "$ref": "#/components/schemas/UserCursorPage"
                 }
               ]
             }
